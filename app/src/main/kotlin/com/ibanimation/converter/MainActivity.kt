@@ -11,7 +11,9 @@ import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -51,6 +53,16 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// Translates Android's content:// URIs into standard Linux paths for Rust
+fun getPathFromUri(uri: Uri): String {
+    val decodedPath = Uri.decode(uri.toString())
+    if (decodedPath.contains("primary:")) {
+        val subPath = decodedPath.substringAfter("primary:")
+        return "/storage/emulated/0/$subPath"
+    }
+    return "/storage/emulated/0/Download" // Fallback default
+}
+
 @Composable
 fun ConverterScreen() {
     val scope = rememberCoroutineScope()
@@ -58,6 +70,19 @@ fun ConverterScreen() {
     var outputPath by remember { mutableStateOf(Environment.getExternalStorageDirectory().path + "/Download") }
     var statusText by remember { mutableStateOf("Ready to process files bro!") }
     var isProcessing by remember { mutableStateOf(false) }
+
+    // Folder Picker Launchers
+    val inputLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri: Uri? ->
+        uri?.let { inputPath = getPathFromUri(it) }
+    }
+
+    val outputLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri: Uri? ->
+        uri?.let { outputPath = getPathFromUri(it) }
+    }
 
     Column(
         modifier = Modifier
@@ -71,21 +96,47 @@ fun ConverterScreen() {
         
         Spacer(modifier = Modifier.height(32.dp))
 
-        OutlinedTextField(
-            value = inputPath,
-            onValueChange = { inputPath = it },
-            label = { Text("Input Folder Path") },
-            modifier = Modifier.fillMaxWidth()
-        )
+        // Input Path Row with Picker Button
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = inputPath,
+                onValueChange = { inputPath = it },
+                label = { Text("Input Folder") },
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Button(
+                onClick = { inputLauncher.launch(null) },
+                modifier = Modifier.padding(top = 6.dp)
+            ) {
+                Text("📁")
+            }
+        }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        OutlinedTextField(
-            value = outputPath,
-            onValueChange = { outputPath = it },
-            label = { Text("Output Folder Path") },
-            modifier = Modifier.fillMaxWidth()
-        )
+        // Output Path Row with Picker Button
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = outputPath,
+                onValueChange = { outputPath = it },
+                label = { Text("Output Folder") },
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Button(
+                onClick = { outputLauncher.launch(null) },
+                modifier = Modifier.padding(top = 6.dp)
+            ) {
+                Text("📁")
+            }
+        }
 
         Spacer(modifier = Modifier.height(32.dp))
 
@@ -162,7 +213,6 @@ suspend fun processPdfToCbz(inputDir: String, outputDir: String): Int = withCont
 
             for (i in 0 until renderer.pageCount) {
                 val page = renderer.openPage(i)
-                // Render at high res (300 DPI layout matching scale multiplier)
                 val bitmap = Bitmap.createBitmap(page.width * 2, page.height * 2, Bitmap.Config.ARGB_8888)
                 page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                 
@@ -171,7 +221,6 @@ suspend fun processPdfToCbz(inputDir: String, outputDir: String): Int = withCont
                 bitmap.compress(Bitmap.CompressFormat.JPEG, 90, outStream)
                 outStream.close()
                 
-                // Immediately recycle bitmap to save RAM
                 bitmap.recycle()
                 page.close()
             }
