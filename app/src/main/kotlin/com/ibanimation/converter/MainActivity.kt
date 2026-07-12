@@ -32,7 +32,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         requestStoragePermission()
         setContent {
-            MaterialTheme {
+            ConverterTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
@@ -416,4 +416,27 @@ suspend fun processCbzToPdf(files: List<File>, outputDir: String, onUpdate: (Str
         }
     }
     return@withContext count
+}
+
+
+@Composable
+fun ConverterTheme(
+    darkTheme: Boolean = androidx.compose.foundation.isSystemInDarkTheme(),
+    // Dynamic color is available on Android 12+ (API 31+)
+    dynamicColor: Boolean = true,
+    content: @Composable () -> Unit
+) {
+    val colorScheme = when {
+        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+            val context = androidx.compose.ui.platform.LocalContext.current
+            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+        }
+        darkTheme -> darkColorScheme()
+        else -> lightColorScheme()
+    }
+
+    MaterialTheme(
+        colorScheme = colorScheme,
+        content = content
+    )
 }
