@@ -16,9 +16,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -65,7 +62,7 @@ fun ConverterScreen() {
     var outputPath by remember { mutableStateOf(Environment.getExternalStorageDirectory().path + "/Download") }
     
     // Engine State
-    var statusText by remember { mutableStateOf("Ready to process files bro!") }
+    var statusText by remember { mutableStateOf("Ready to process files!") }
     var verboseLog by remember { mutableStateOf("") }
     var progressFraction by remember { mutableStateOf(0f) }
     var isProcessing by remember { mutableStateOf(false) }
@@ -202,8 +199,8 @@ fun ConverterScreen() {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text(text = "PDF <-> CBZ Engine", style = MaterialTheme.typography.headlineLarge)
-        Text(text = "Rust + M3 Powered", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+        Text(text = "PDF <-> CBZ Converter", style = MaterialTheme.typography.headlineLarge)
+        Text(text = "Rust backend", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
         
         Spacer(modifier = Modifier.height(32.dp))
 
@@ -296,7 +293,7 @@ fun FolderPickerDialog(initialPath: String, onFolderSelected: (String) -> Unit, 
         onDismissRequest = onDismiss,
         title = {
             Column {
-                Text("Select Directory", style = MaterialTheme.typography.titleMedium)
+                Text("Select Directory\n(Note: Hidden folders will not be shown)", style = MaterialTheme.typography.titleMedium)
                 Text(text = currentPath, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
             }
         },
