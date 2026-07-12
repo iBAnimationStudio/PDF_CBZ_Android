@@ -199,7 +199,7 @@ fun ConverterScreen() {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text(text = "PDF <-> CBZ Converter", style = MaterialTheme.typography.headlineLarge)
+        Text(text = "PDF ⇌ CBZ Converter", style = MaterialTheme.typography.headlineLarge)
         Text(text = "Rust backend", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
         
         Spacer(modifier = Modifier.height(32.dp))
