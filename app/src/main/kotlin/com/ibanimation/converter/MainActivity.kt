@@ -11,10 +11,14 @@ import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -53,35 +57,142 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// Translates Android's content:// URIs into standard Linux paths for Rust
-fun getPathFromUri(uri: Uri): String {
-    val decodedPath = Uri.decode(uri.toString())
-    if (decodedPath.contains("primary:")) {
-        val subPath = decodedPath.substringAfter("primary:")
-        return "/storage/emulated/0/$subPath"
-    }
-    return "/storage/emulated/0/Download" // Fallback default
-}
-
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ConverterScreen() {
     val scope = rememberCoroutineScope()
     var inputPath by remember { mutableStateOf(Environment.getExternalStorageDirectory().path + "/Download") }
     var outputPath by remember { mutableStateOf(Environment.getExternalStorageDirectory().path + "/Download") }
+    
+    // Engine State
     var statusText by remember { mutableStateOf("Ready to process files bro!") }
+    var verboseLog by remember { mutableStateOf("") }
+    var progressFraction by remember { mutableStateOf(0f) }
     var isProcessing by remember { mutableStateOf(false) }
 
-    // Folder Picker Launchers
-    val inputLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocumentTree()
-    ) { uri: Uri? ->
-        uri?.let { inputPath = getPathFromUri(it) }
+    // Picker & Popup State
+    var showPicker by remember { mutableStateOf(false) }
+    var activeTarget by remember { mutableStateOf("") } 
+    var showConfirmationSheet by remember { mutableStateOf(false) }
+    var selectedAction by remember { mutableStateOf("") } // "PDF_TO_CBZ" or "CBZ_TO_PDF"
+    var scannedFiles by remember { mutableStateOf<List<File>>(emptyList()) }
+    val selectedFiles = remember { mutableStateListOf<File>() }
+
+    if (showPicker) {
+        FolderPickerDialog(
+            initialPath = if (activeTarget == "input") inputPath else outputPath,
+            onFolderSelected = { selectedPath ->
+                if (activeTarget == "input") inputPath = selectedPath else outputPath = selectedPath
+                showPicker = false
+            },
+            onDismiss = { showPicker = false }
+        )
     }
 
-    val outputLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocumentTree()
-    ) { uri: Uri? ->
-        uri?.let { outputPath = getPathFromUri(it) }
+    // Interactive File Picker Popup Sheet
+    if (showConfirmationSheet) {
+        ModalBottomSheet(onDismissRequest = { showConfirmationSheet = false }) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 24.dp, end = 24.dp, bottom = 40.dp)
+            ) {
+                Text(
+                    text = if (selectedAction == "PDF_TO_CBZ") "Action: PDF ➔ CBZ" else "Action: CBZ ➔ PDF",
+                    style = MaterialTheme.typography.titleLarge
+                )
+                Text(
+                    text = "Found ${scannedFiles.size} recognizable files",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Select All Checkbox
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            if (selectedFiles.size == scannedFiles.size) {
+                                selectedFiles.clear()
+                            } else {
+                                selectedFiles.clear()
+                                selectedFiles.addAll(scannedFiles)
+                            }
+                        }
+                ) {
+                    Checkbox(
+                        checked = selectedFiles.size == scannedFiles.size && scannedFiles.isNotEmpty(),
+                        onCheckedChange = { checked ->
+                            selectedFiles.clear()
+                            if (checked) selectedFiles.addAll(scannedFiles)
+                        }
+                    )
+                    Text("Select All", style = MaterialTheme.typography.bodyMedium)
+                }
+                
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                // Scrollable File List
+                LazyColumn(modifier = Modifier.height(200.dp)) {
+                    items(scannedFiles) { file ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    if (selectedFiles.contains(file)) selectedFiles.remove(file) else selectedFiles.add(file)
+                                }
+                        ) {
+                            Checkbox(
+                                checked = selectedFiles.contains(file),
+                                onCheckedChange = { checked ->
+                                    if (checked) selectedFiles.add(file) else selectedFiles.remove(file)
+                                }
+                            )
+                            Text(file.name, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Confirm & Run Button
+                Button(
+                    onClick = {
+                        showConfirmationSheet = false
+                        isProcessing = true
+                        scope.launch {
+                            val targets = selectedFiles.toList()
+                            if (selectedAction == "PDF_TO_CBZ") {
+                                statusText = "Converting PDFs..."
+                                val count = processPdfToCbz(targets, outputPath) { log, progress ->
+                                    verboseLog = log
+                                    progressFraction = progress
+                                }
+                                statusText = "Done! Cleaned up $count PDF files."
+                            } else {
+                                statusText = "Converting CBZs..."
+                                val count = processCbzToPdf(targets, outputPath) { log, progress ->
+                                    verboseLog = log
+                                    progressFraction = progress
+                                }
+                                statusText = "Done! Extracted $count CBZ files."
+                            }
+                            isProcessing = false
+                            progressFraction = 0f
+                            verboseLog = ""
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = selectedFiles.isNotEmpty()
+                ) {
+                    Text("Confirm & Run 🚀")
+                }
+            }
+        }
     }
 
     Column(
@@ -96,11 +207,8 @@ fun ConverterScreen() {
         
         Spacer(modifier = Modifier.height(32.dp))
 
-        // Input Path Row with Picker Button
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        // Input Path
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
                 value = inputPath,
                 onValueChange = { inputPath = it },
@@ -108,21 +216,13 @@ fun ConverterScreen() {
                 modifier = Modifier.weight(1f)
             )
             Spacer(modifier = Modifier.width(8.dp))
-            Button(
-                onClick = { inputLauncher.launch(null) },
-                modifier = Modifier.padding(top = 6.dp)
-            ) {
-                Text("📁")
-            }
+            Button(onClick = { activeTarget = "input"; showPicker = true }, modifier = Modifier.padding(top = 6.dp)) { Text("📁") }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Output Path Row with Picker Button
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        // Output Path
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
                 value = outputPath,
                 onValueChange = { outputPath = it },
@@ -130,18 +230,16 @@ fun ConverterScreen() {
                 modifier = Modifier.weight(1f)
             )
             Spacer(modifier = Modifier.width(8.dp))
-            Button(
-                onClick = { outputLauncher.launch(null) },
-                modifier = Modifier.padding(top = 6.dp)
-            ) {
-                Text("📁")
-            }
+            Button(onClick = { activeTarget = "output"; showPicker = true }, modifier = Modifier.padding(top = 6.dp)) { Text("📁") }
         }
 
         Spacer(modifier = Modifier.height(32.dp))
 
+        // Dynamic Verbose Progress Panel
         if (isProcessing) {
-            CircularProgressIndicator()
+            LinearProgressIndicator(progress = { progressFraction }, modifier = Modifier.fillMaxWidth())
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(text = verboseLog, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
             Spacer(modifier = Modifier.height(16.dp))
         }
 
@@ -151,33 +249,27 @@ fun ConverterScreen() {
         ) {
             Button(
                 onClick = {
-                    scope.launch {
-                        isProcessing = true
-                        statusText = "Converting PDF to CBZ..."
-                        val count = processPdfToCbz(inputPath, outputPath)
-                        statusText = "Done! Processed $count PDF files."
-                        isProcessing = false
-                    }
+                    val files = File(inputPath).listFiles { _, name -> name.endsWith(".pdf", ignoreCase = true) }?.toList() ?: emptyList()
+                    scannedFiles = files
+                    selectedFiles.clear()
+                    selectedFiles.addAll(files)
+                    selectedAction = "PDF_TO_CBZ"
+                    showConfirmationSheet = true
                 },
                 enabled = !isProcessing
-            ) {
-                Text("PDF ➔ CBZ")
-            }
+            ) { Text("PDF ➔ CBZ") }
 
             Button(
                 onClick = {
-                    scope.launch {
-                        isProcessing = true
-                        statusText = "Converting CBZ to PDF..."
-                        val count = processCbzToPdf(inputPath, outputPath)
-                        statusText = "Done! Processed $count CBZ files."
-                        isProcessing = false
-                    }
+                    val files = File(inputPath).listFiles { _, name -> name.endsWith(".cbz", ignoreCase = true) }?.toList() ?: emptyList()
+                    scannedFiles = files
+                    selectedFiles.clear()
+                    selectedFiles.addAll(files)
+                    selectedAction = "CBZ_TO_PDF"
+                    showConfirmationSheet = true
                 },
                 enabled = !isProcessing
-            ) {
-                Text("CBZ ➔ PDF")
-            }
+            ) { Text("CBZ ➔ PDF") }
         }
 
         Spacer(modifier = Modifier.height(32.dp))
@@ -185,25 +277,64 @@ fun ConverterScreen() {
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
         ) {
-            Text(
-                text = statusText,
-                modifier = Modifier.padding(16.dp),
-                style = MaterialTheme.typography.bodyMedium
-            )
+            Text(text = statusText, modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium)
         }
     }
 }
 
-suspend fun processPdfToCbz(inputDir: String, outputDir: String): Int = withContext(Dispatchers.IO) {
-    val inDir = File(inputDir)
+// Custom Native Folder Picker Component
+@Composable
+fun FolderPickerDialog(initialPath: String, onFolderSelected: (String) -> Unit, onDismiss: () -> Unit) {
+    var currentPath by remember { mutableStateOf(initialPath) }
+    val currentFile = File(currentPath)
+    val folders = remember(currentPath) {
+        currentFile.listFiles { file -> file.isDirectory && !file.isHidden }
+            ?.sortedBy { it.name } ?: emptyList()
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text("Select Directory", style = MaterialTheme.typography.titleMedium)
+                Text(text = currentPath, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            }
+        },
+        text = {
+            Column(modifier = Modifier.height(350.dp)) {
+                if (currentFile.parentFile != null && currentPath != Environment.getExternalStorageDirectory().path) {
+                    ListItem(
+                        headlineContent = { Text(".. (Parent Folder)") },
+                        leadingContent = { Text("⬅️") },
+                        modifier = Modifier.clickable { currentFile.parentFile?.let { currentPath = it.absolutePath } }
+                    )
+                    HorizontalDivider()
+                }
+                LazyColumn {
+                    items(folders) { folder ->
+                        ListItem(
+                            headlineContent = { Text(folder.name) },
+                            leadingContent = { Text("📁") },
+                            modifier = Modifier.clickable { currentPath = folder.absolutePath }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = { Button(onClick = { onFolderSelected(currentPath) }) { Text("Select This Folder") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+suspend fun processPdfToCbz(files: List<File>, outputDir: String, onUpdate: (String, Float) -> Unit): Int = withContext(Dispatchers.IO) {
     val outDir = File(outputDir)
-    if (!inDir.exists()) return@withContext 0
     outDir.mkdirs()
-
     var count = 0
-    val pdfFiles = inDir.listFiles { _, name -> name.endsWith(".pdf", ignoreCase = true) } ?: return@withContext 0
 
-    for (pdf in pdfFiles) {
+    for ((index, pdf) in files.withIndex()) {
+        val totalProgress = (index.toFloat() / files.size)
+        onUpdate("Scanning layout: ${pdf.name}", totalProgress)
+
         val tempDir = File(outDir, ".temp_${pdf.nameWithoutExtension}")
         tempDir.mkdirs()
 
@@ -212,6 +343,8 @@ suspend fun processPdfToCbz(inputDir: String, outputDir: String): Int = withCont
             val renderer = PdfRenderer(fileDescriptor)
 
             for (i in 0 until renderer.pageCount) {
+                onUpdate("Rendering ${pdf.name} (Page ${i + 1}/${renderer.pageCount})", totalProgress + (i.toFloat() / renderer.pageCount / files.size))
+                
                 val page = renderer.openPage(i)
                 val bitmap = Bitmap.createBitmap(page.width * 2, page.height * 2, Bitmap.Config.ARGB_8888)
                 page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
@@ -227,6 +360,7 @@ suspend fun processPdfToCbz(inputDir: String, outputDir: String): Int = withCont
             renderer.close()
             fileDescriptor.close()
 
+            onUpdate("Rust Backend: Streaming ${pdf.nameWithoutExtension}.cbz archive...", totalProgress + (0.9f / files.size))
             val cbzFile = File(outDir, "${pdf.nameWithoutExtension}.cbz")
             NativeEngine.packToCbz(tempDir.absolutePath, cbzFile.absolutePath)
             count++
@@ -239,16 +373,15 @@ suspend fun processPdfToCbz(inputDir: String, outputDir: String): Int = withCont
     return@withContext count
 }
 
-suspend fun processCbzToPdf(inputDir: String, outputDir: String): Int = withContext(Dispatchers.IO) {
-    val inDir = File(inputDir)
+suspend fun processCbzToPdf(files: List<File>, outputDir: String, onUpdate: (String, Float) -> Unit): Int = withContext(Dispatchers.IO) {
     val outDir = File(outputDir)
-    if (!inDir.exists()) return@withContext 0
     outDir.mkdirs()
-
     var count = 0
-    val cbzFiles = inDir.listFiles { _, name -> name.endsWith(".cbz", ignoreCase = true) } ?: return@withContext 0
 
-    for (cbz in cbzFiles) {
+    for ((index, cbz) in files.withIndex()) {
+        val totalProgress = (index.toFloat() / files.size)
+        onUpdate("Rust Backend: Extracting ${cbz.name}", totalProgress)
+
         val tempDir = File(outDir, ".temp_${cbz.nameWithoutExtension}")
         tempDir.mkdirs()
 
@@ -262,9 +395,11 @@ suspend fun processCbzToPdf(inputDir: String, outputDir: String): Int = withCont
 
             if (imageFiles.isNotEmpty()) {
                 val pdfDocument = PdfDocument()
-                for ((index, imgFile) in imageFiles.withIndex()) {
+                for ((imgIndex, imgFile) in imageFiles.withIndex()) {
+                    onUpdate("Binding ${cbz.nameWithoutExtension}.pdf (Image ${imgIndex + 1}/${imageFiles.size})", totalProgress + (imgIndex.toFloat() / imageFiles.size / files.size))
+                    
                     val bitmap = BitmapFactory.decodeFile(imgFile.absolutePath)
-                    val pageInfo = PdfDocument.PageInfo.Builder(bitmap.width, bitmap.height, index + 1).create()
+                    val pageInfo = PdfDocument.PageInfo.Builder(bitmap.width, bitmap.height, imgIndex + 1).create()
                     val page = pdfDocument.startPage(pageInfo)
                     page.canvas.drawBitmap(bitmap, 0f, 0f, null)
                     pdfDocument.finishPage(page)
