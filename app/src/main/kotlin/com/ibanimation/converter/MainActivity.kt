@@ -3,12 +3,15 @@ package com.ibanimation.converter
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.pdf.PdfDocument
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.ParcelFileDescriptor
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -67,9 +70,13 @@ fun ConverterScreen() {
     var progressFraction by remember { mutableStateOf(0f) }
     var isProcessing by remember { mutableStateOf(false) }
 
+    // Export Formats Configuration State
+    var selectedFormat by remember { mutableStateOf("JPG") }
+    var jpgQuality by remember { mutableFloatStateOf(85f) }
+
     // Picker & Popup State
     var showPicker by remember { mutableStateOf(false) }
-    var activeTarget by remember { mutableStateOf("") } 
+    var activeTarget by remember { mutableStateOf("input") } 
     var showConfirmationSheet by remember { mutableStateOf(false) }
     var selectedAction by remember { mutableStateOf("") } // "PDF_TO_CBZ" or "CBZ_TO_PDF"
     var scannedFiles by remember { mutableStateOf<List<File>>(emptyList()) }
@@ -165,7 +172,7 @@ fun ConverterScreen() {
                             val targets = selectedFiles.toList()
                             if (selectedAction == "PDF_TO_CBZ") {
                                 statusText = "Converting PDFs..."
-                                val count = processPdfToCbz(targets, outputPath) { log, progress ->
+                                val count = processPdfToCbz(targets, outputPath, selectedFormat, jpgQuality.toInt()) { log, progress ->
                                     verboseLog = log
                                     progressFraction = progress
                                 }
@@ -230,7 +237,7 @@ fun ConverterScreen() {
             Button(onClick = { activeTarget = "output"; showPicker = true }, modifier = Modifier.padding(top = 6.dp)) { Text("📁") }
         }
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
         // Dynamic Verbose Progress Panel
         if (isProcessing) {
@@ -239,6 +246,28 @@ fun ConverterScreen() {
             Text(text = verboseLog, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
             Spacer(modifier = Modifier.height(16.dp))
         }
+
+        // CBZ Export Settings Panel
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("CBZ Export Settings", style = MaterialTheme.typography.titleMedium)
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = selectedFormat == "JPG", onClick = { selectedFormat = "JPG" }, label = { Text("JPG (Smaller)") })
+                    FilterChip(selected = selectedFormat == "PNG", onClick = { selectedFormat = "PNG" }, label = { Text("PNG (Lossless)") })
+                }
+                if (selectedFormat == "JPG") {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text("JPG Quality: ${jpgQuality.toInt()}%", style = MaterialTheme.typography.bodyMedium)
+                    Slider(value = jpgQuality, onValueChange = { jpgQuality = it }, valueRange = 10f..100f, steps = 17)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -269,7 +298,7 @@ fun ConverterScreen() {
             ) { Text("CBZ ➔ PDF") }
         }
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(24.dp))
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
@@ -323,44 +352,61 @@ fun FolderPickerDialog(initialPath: String, onFolderSelected: (String) -> Unit, 
     )
 }
 
-suspend fun processPdfToCbz(files: List<File>, outputDir: String, onUpdate: (String, Float) -> Unit): Int = withContext(Dispatchers.IO) {
+suspend fun processPdfToCbz(
+    files: List<File>,
+    outputDir: String,
+    format: String = "JPG",
+    quality: Int = 85,
+    onUpdate: (String, Float) -> Unit
+): Int = withContext(Dispatchers.IO) {
     val outDir = File(outputDir)
     outDir.mkdirs()
     var count = 0
 
-    for ((index, pdf) in files.withIndex()) {
-        val totalProgress = (index.toFloat() / files.size)
-        onUpdate("Scanning layout: ${pdf.name}", totalProgress)
+    for ((index, pdfFile) in files.withIndex()) {
+        val totalProgress = index.toFloat() / files.size
+        onUpdate("Opening ${pdfFile.name}...", totalProgress)
 
-        val tempDir = File(outDir, ".temp_${pdf.nameWithoutExtension}")
+        val tempDir = File(outDir, ".temp_${pdfFile.nameWithoutExtension}")
         tempDir.mkdirs()
 
         try {
-            val fileDescriptor = android.os.ParcelFileDescriptor.open(pdf, android.os.ParcelFileDescriptor.MODE_READ_ONLY)
-            val renderer = PdfRenderer(fileDescriptor)
+            val fileDescriptor = ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY)
+            val pdfRenderer = PdfRenderer(fileDescriptor)
+            val pageCount = pdfRenderer.pageCount
 
-            for (i in 0 until renderer.pageCount) {
-                onUpdate("Rendering ${pdf.name} (Page ${i + 1}/${renderer.pageCount})", totalProgress + (i.toFloat() / renderer.pageCount / files.size))
-                
-                val page = renderer.openPage(i)
+            val isPng = format.equals("PNG", ignoreCase = true)
+            val ext = if (isPng) "png" else "jpg"
+            val compressFormat = if (isPng) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
+
+            for (i in 0 until pageCount) {
+                val pageProgress = i.toFloat() / pageCount
+                onUpdate("Rendering page ${i + 1}/$pageCount ($format)...", totalProgress + (pageProgress * 0.8f / files.size))
+
+                val page = pdfRenderer.openPage(i)
                 val bitmap = Bitmap.createBitmap(page.width * 2, page.height * 2, Bitmap.Config.ARGB_8888)
+                
+                val canvas = Canvas(bitmap)
+                canvas.drawColor(Color.WHITE)
+                
                 page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                
-                val imgFile = File(tempDir, String.format("page-%04d.jpg", i + 1))
-                val outStream = FileOutputStream(imgFile)
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, outStream)
-                outStream.close()
-                
-                bitmap.recycle()
                 page.close()
+
+                val imgFile = File(tempDir, String.format("page_%04d.%s", i + 1, ext))
+                val outStream = FileOutputStream(imgFile)
+                bitmap.compress(compressFormat, quality, outStream)
+                outStream.flush()
+                outStream.close()
+                bitmap.recycle()
             }
-            renderer.close()
+            pdfRenderer.close()
             fileDescriptor.close()
 
-            onUpdate("Rust Backend: Streaming ${pdf.nameWithoutExtension}.cbz archive...", totalProgress + (0.9f / files.size))
-            val cbzFile = File(outDir, "${pdf.nameWithoutExtension}.cbz")
-            NativeEngine.packToCbz(tempDir.absolutePath, cbzFile.absolutePath)
-            count++
+            onUpdate("⚡ Rust Core: Packing ${pdfFile.nameWithoutExtension}.cbz...", totalProgress + (0.85f / files.size))
+            val cbzFile = File(outDir, "${pdfFile.nameWithoutExtension}.cbz")
+            val success = NativeEngine.packToCbz(tempDir.absolutePath, cbzFile.absolutePath)
+            if (success) count++
+
         } catch (e: Exception) {
             e.printStackTrace()
         } finally {
@@ -377,7 +423,7 @@ suspend fun processCbzToPdf(files: List<File>, outputDir: String, onUpdate: (Str
 
     for ((index, cbz) in files.withIndex()) {
         val totalProgress = (index.toFloat() / files.size)
-        onUpdate("Rust Backend: Extracting ${cbz.name}", totalProgress)
+        onUpdate("Processing ${cbz.name}...", totalProgress)
 
         val tempDir = File(outDir, ".temp_${cbz.nameWithoutExtension}")
         tempDir.mkdirs()
@@ -385,28 +431,18 @@ suspend fun processCbzToPdf(files: List<File>, outputDir: String, onUpdate: (Str
         try {
             NativeEngine.extractCbz(cbz.absolutePath, tempDir.absolutePath)
 
-            val imageFiles = tempDir.walkTopDown()
-                .filter { it.isFile && (it.extension.equals("jpg", true) || it.extension.equals("png", true)) }
-                .sortedBy { it.name }
-                .toList()
-
-            if (imageFiles.isNotEmpty()) {
-                val pdfDocument = PdfDocument()
-                for ((imgIndex, imgFile) in imageFiles.withIndex()) {
-                    onUpdate("Binding ${cbz.nameWithoutExtension}.pdf (Image ${imgIndex + 1}/${imageFiles.size})", totalProgress + (imgIndex.toFloat() / imageFiles.size / files.size))
-                    
-                    val bitmap = BitmapFactory.decodeFile(imgFile.absolutePath)
-                    val pageInfo = PdfDocument.PageInfo.Builder(bitmap.width, bitmap.height, imgIndex + 1).create()
-                    val page = pdfDocument.startPage(pageInfo)
-                    page.canvas.drawBitmap(bitmap, 0f, 0f, null)
-                    pdfDocument.finishPage(page)
-                    bitmap.recycle()
-                }
-                val pdfFile = File(outDir, "${cbz.nameWithoutExtension}.pdf")
-                val outStream = FileOutputStream(pdfFile)
-                pdfDocument.writeTo(outStream)
-                pdfDocument.close()
-                outStream.close()
+            onUpdate("⚡ Rust Core: Packaging ${cbz.nameWithoutExtension}.pdf...", totalProgress + (0.5f / files.size))
+            val pdfFile = File(outDir, "${cbz.nameWithoutExtension}.pdf")
+            
+            // 👇 BIND KOTLIN UI UPDATER TO RUST METRICS HERE
+            NativeEngine.onProgressUpdate = { msg, prog ->
+                val dynamicProgress = totalProgress + (0.5f / files.size) + (prog * 0.5f / files.size)
+                onUpdate("⚡ Rust Core: $msg", dynamicProgress)
+            }
+            
+            val success = NativeEngine.imagesToPdf(tempDir.absolutePath, pdfFile.absolutePath)
+            
+            if (success) {
                 count++
             }
         } catch (e: Exception) {
@@ -418,11 +454,9 @@ suspend fun processCbzToPdf(files: List<File>, outputDir: String, onUpdate: (Str
     return@withContext count
 }
 
-
 @Composable
 fun ConverterTheme(
     darkTheme: Boolean = androidx.compose.foundation.isSystemInDarkTheme(),
-    // Dynamic color is available on Android 12+ (API 31+)
     dynamicColor: Boolean = true,
     content: @Composable () -> Unit
 ) {
