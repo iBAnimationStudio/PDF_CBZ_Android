@@ -2,10 +2,8 @@ package com.ibanimation.converter
 
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.pdf.PdfDocument
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.Build
@@ -15,10 +13,18 @@ import android.os.ParcelFileDescriptor
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.*
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -57,30 +63,44 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun ConverterScreen() {
     val scope = rememberCoroutineScope()
     var inputPath by remember { mutableStateOf(Environment.getExternalStorageDirectory().path + "/Download") }
     var outputPath by remember { mutableStateOf(Environment.getExternalStorageDirectory().path + "/Download") }
-    
+
     // Engine State
-    var statusText by remember { mutableStateOf("Ready to process files!") }
     var verboseLog by remember { mutableStateOf("") }
-    var progressFraction by remember { mutableStateOf(0f) }
+    var progressFraction by remember { mutableFloatStateOf(0f) }
     var isProcessing by remember { mutableStateOf(false) }
 
-    // Export Formats Configuration State
+    // Export Formats & Engine Configuration State
     var selectedFormat by remember { mutableStateOf("JPG") }
     var jpgQuality by remember { mutableFloatStateOf(85f) }
+    
+    // M3 Settings Dropdown State
+    var expandedEngineDropdown by remember { mutableStateOf(false) }
+    val pdfEngineOptions = listOf("Standard (Fast)", "High Quality (Render 2x)", "Low Quality (Compressed)")
+    var selectedPdfEngine by remember { mutableStateOf(pdfEngineOptions[0]) }
 
     // Picker & Popup State
     var showPicker by remember { mutableStateOf(false) }
-    var activeTarget by remember { mutableStateOf("input") } 
+    var activeTarget by remember { mutableStateOf("input") }
     var showConfirmationSheet by remember { mutableStateOf(false) }
-    var selectedAction by remember { mutableStateOf("") } // "PDF_TO_CBZ" or "CBZ_TO_PDF"
+    var selectedAction by remember { mutableStateOf("") }
     var scannedFiles by remember { mutableStateOf<List<File>>(emptyList()) }
     val selectedFiles = remember { mutableStateListOf<File>() }
+
+    // Aesthetic Success Dialog State
+    var showSuccessDialog by remember { mutableStateOf(false) }
+    var successMessage by remember { mutableStateOf("") }
+
+    val animatedProgress by animateFloatAsState(
+        targetValue = progressFraction,
+        animationSpec = tween(durationMillis = 300),
+        label = "ProgressAnimation"
+    )
 
     if (showPicker) {
         FolderPickerDialog(
@@ -93,27 +113,52 @@ fun ConverterScreen() {
         )
     }
 
-    // Interactive File Picker Popup Sheet
+    // Aesthetic Task Finished Dialog
+    if (showSuccessDialog) {
+        AlertDialog(
+            onDismissRequest = { showSuccessDialog = false },
+            icon = {
+                Icon(
+                    imageVector = Icons.Rounded.CheckCircle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(36.dp)
+                )
+            },
+            title = { Text("Task Finished", style = MaterialTheme.typography.headlineSmall) },
+            text = { Text(successMessage, style = MaterialTheme.typography.bodyMedium) },
+            confirmButton = {
+                TextButton(onClick = { showSuccessDialog = false }) {
+                    Text("Done")
+                }
+            },
+            shape = RoundedCornerShape(28.dp)
+        )
+    }
+
+    // Confirmation Sheet
     if (showConfirmationSheet) {
-        ModalBottomSheet(onDismissRequest = { showConfirmationSheet = false }) {
+        ModalBottomSheet(
+            onDismissRequest = { showConfirmationSheet = false },
+            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+        ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 24.dp, end = 24.dp, bottom = 40.dp)
+                    .padding(start = 24.dp, end = 24.dp, bottom = 32.dp)
             ) {
                 Text(
                     text = if (selectedAction == "PDF_TO_CBZ") "Action: PDF ➔ CBZ" else "Action: CBZ ➔ PDF",
                     style = MaterialTheme.typography.titleLarge
                 )
                 Text(
-                    text = "Found ${scannedFiles.size} recognizable files",
+                    text = "Found ${scannedFiles.size} target files",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                
+
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Select All Checkbox
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
@@ -136,11 +181,10 @@ fun ConverterScreen() {
                     )
                     Text("Select All", style = MaterialTheme.typography.bodyMedium)
                 }
-                
+
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-                // Scrollable File List
-                LazyColumn(modifier = Modifier.height(200.dp)) {
+                LazyColumn(modifier = Modifier.height(180.dp)) {
                     items(scannedFiles) { file ->
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -161,39 +205,43 @@ fun ConverterScreen() {
                     }
                 }
 
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(20.dp))
 
-                // Confirm & Run Button
                 Button(
                     onClick = {
                         showConfirmationSheet = false
                         isProcessing = true
                         scope.launch {
                             val targets = selectedFiles.toList()
-                            if (selectedAction == "PDF_TO_CBZ") {
-                                statusText = "Converting PDFs..."
-                                val count = processPdfToCbz(targets, outputPath, selectedFormat, jpgQuality.toInt()) { log, progress ->
+                            val count = if (selectedAction == "PDF_TO_CBZ") {
+                                processPdfToCbz(targets, outputPath, selectedFormat, jpgQuality.toInt()) { log, progress ->
                                     verboseLog = log
                                     progressFraction = progress
                                 }
-                                statusText = "Done! Cleaned up $count PDF files."
                             } else {
-                                statusText = "Converting CBZs..."
-                                val count = processCbzToPdf(targets, outputPath) { log, progress ->
+                                processCbzToPdf(targets, outputPath) { log, progress ->
                                     verboseLog = log
                                     progressFraction = progress
                                 }
-                                statusText = "Done! Extracted $count CBZ files."
                             }
+                            
                             isProcessing = false
                             progressFraction = 0f
                             verboseLog = ""
+
+                            successMessage = if (selectedAction == "PDF_TO_CBZ") {
+                                "Successfully converted $count PDF files to CBZ."
+                            } else {
+                                "Successfully converted $count CBZ files to PDF."
+                            }
+                            showSuccessDialog = true
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = selectedFiles.isNotEmpty()
+                    enabled = selectedFiles.isNotEmpty(),
+                    shape = RoundedCornerShape(16.dp)
                 ) {
-                    Text("Confirm & Run 🚀")
+                    Text("Start Conversion")
                 }
             }
         }
@@ -202,76 +250,161 @@ fun ConverterScreen() {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(24.dp),
+            .padding(24.dp)
+            .animateContentSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
+        Icon(
+            imageVector = Icons.Rounded.SwapHoriz,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(48.dp)
+        )
         Text(text = "PDF ⇌ CBZ Converter", style = MaterialTheme.typography.headlineLarge)
         Text(text = "Rust backend", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-        
-        Spacer(modifier = Modifier.height(32.dp))
+
+        Spacer(modifier = Modifier.height(28.dp))
 
         // Input Path
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = inputPath,
-                onValueChange = { inputPath = it },
-                label = { Text("Input Folder") },
-                modifier = Modifier.weight(1f)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Button(onClick = { activeTarget = "input"; showPicker = true }, modifier = Modifier.padding(top = 6.dp)) { Text("📁") }
-        }
+        OutlinedTextField(
+            value = inputPath,
+            onValueChange = { inputPath = it },
+            label = { Text("Input Folder") },
+            modifier = Modifier.fillMaxWidth(),
+            trailingIcon = {
+                IconButton(onClick = { activeTarget = "input"; showPicker = true }) {
+                    Icon(Icons.Rounded.Folder, contentDescription = "Select Input Folder")
+                }
+            },
+            shape = RoundedCornerShape(16.dp)
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Output Path
+        OutlinedTextField(
+            value = outputPath,
+            onValueChange = { outputPath = it },
+            label = { Text("Output Folder") },
+            modifier = Modifier.fillMaxWidth(),
+            trailingIcon = {
+                IconButton(onClick = { activeTarget = "output"; showPicker = true }) {
+                    Icon(Icons.Rounded.Folder, contentDescription = "Select Output Folder")
+                }
+            },
+            shape = RoundedCornerShape(16.dp)
+        )
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Output Path
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = outputPath,
-                onValueChange = { outputPath = it },
-                label = { Text("Output Folder") },
-                modifier = Modifier.weight(1f)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Button(onClick = { activeTarget = "output"; showPicker = true }, modifier = Modifier.padding(top = 6.dp)) { Text("📁") }
+        // Dynamic Wavy Expressive Snake Progress Panel
+        AnimatedVisibility(
+            visible = isProcessing,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
+            Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                LinearWavyProgressIndicator(
+                    progress = { animatedProgress },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = verboseLog,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.secondary
+                )
+            }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // Dynamic Verbose Progress Panel
-        if (isProcessing) {
-            LinearProgressIndicator(progress = { progressFraction }, modifier = Modifier.fillMaxWidth())
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(text = verboseLog, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
-            Spacer(modifier = Modifier.height(16.dp))
-        }
-
-        // CBZ Export Settings Panel
+        // CBZ Export Settings Card
         Card(
             modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text("CBZ Export Settings", style = MaterialTheme.typography.titleMedium)
+                
                 Spacer(modifier = Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = selectedFormat == "JPG", onClick = { selectedFormat = "JPG" }, label = { Text("JPG (Smaller)") })
-                    FilterChip(selected = selectedFormat == "PNG", onClick = { selectedFormat = "PNG" }, label = { Text("PNG (Lossless)") })
+
+                // M3 Render Engine Settings Dropdown
+                ExposedDropdownMenuBox(
+                    expanded = expandedEngineDropdown,
+                    onExpandedChange = { expandedEngineDropdown = !expandedEngineDropdown }
+                ) {
+                    OutlinedTextField(
+                        value = selectedPdfEngine,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Render Preset") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedEngineDropdown) },
+                        colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
+                        modifier = Modifier
+                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                            .fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+
+                    ExposedDropdownMenu(
+                        expanded = expandedEngineDropdown,
+                        onDismissRequest = { expandedEngineDropdown = false }
+                    ) {
+                        pdfEngineOptions.forEach { option ->
+                            DropdownMenuItem(
+                                text = { Text(option) },
+                                onClick = {
+                                    selectedPdfEngine = option
+                                    expandedEngineDropdown = false
+                                },
+                                contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
+                            )
+                        }
+                    }
                 }
-                if (selectedFormat == "JPG") {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text("JPG Quality: ${jpgQuality.toInt()}%", style = MaterialTheme.typography.bodyMedium)
-                    Slider(value = jpgQuality, onValueChange = { jpgQuality = it }, valueRange = 10f..100f, steps = 17)
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Image Format Selection
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = selectedFormat == "JPG",
+                        onClick = { selectedFormat = "JPG" },
+                        label = { Text("JPG (Smaller)") }
+                    )
+                    FilterChip(
+                        selected = selectedFormat == "PNG",
+                        onClick = { selectedFormat = "PNG" },
+                        label = { Text("PNG (Lossless)") }
+                    )
+                }
+
+                AnimatedVisibility(
+                    visible = selectedFormat == "JPG",
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically()
+                ) {
+                    Column {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("JPG Quality: ${jpgQuality.toInt()}%", style = MaterialTheme.typography.bodyMedium)
+                        Slider(
+                            value = jpgQuality,
+                            onValueChange = { jpgQuality = it },
+                            valueRange = 10f..100f,
+                            steps = 17
+                        )
+                    }
                 }
             }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // Conversion Trigger Buttons
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Button(
                 onClick = {
@@ -282,7 +415,9 @@ fun ConverterScreen() {
                     selectedAction = "PDF_TO_CBZ"
                     showConfirmationSheet = true
                 },
-                enabled = !isProcessing
+                enabled = !isProcessing,
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(16.dp)
             ) { Text("PDF ➔ CBZ") }
 
             Button(
@@ -294,21 +429,15 @@ fun ConverterScreen() {
                     selectedAction = "CBZ_TO_PDF"
                     showConfirmationSheet = true
                 },
-                enabled = !isProcessing
+                enabled = !isProcessing,
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(16.dp)
             ) { Text("CBZ ➔ PDF") }
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-        ) {
-            Text(text = statusText, modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium)
         }
     }
 }
 
-// Custom Native Folder Picker Component
+// Native Folder Picker Dialog
 @Composable
 fun FolderPickerDialog(initialPath: String, onFolderSelected: (String) -> Unit, onDismiss: () -> Unit) {
     var currentPath by remember { mutableStateOf(initialPath) }
@@ -322,7 +451,7 @@ fun FolderPickerDialog(initialPath: String, onFolderSelected: (String) -> Unit, 
         onDismissRequest = onDismiss,
         title = {
             Column {
-                Text("Select Directory\n(Note: Hidden folders will not be shown)", style = MaterialTheme.typography.titleMedium)
+                Text("Select Directory", style = MaterialTheme.typography.titleMedium)
                 Text(text = currentPath, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
             }
         },
@@ -434,17 +563,13 @@ suspend fun processCbzToPdf(files: List<File>, outputDir: String, onUpdate: (Str
             onUpdate("⚡ Rust Core: Packaging ${cbz.nameWithoutExtension}.pdf...", totalProgress + (0.5f / files.size))
             val pdfFile = File(outDir, "${cbz.nameWithoutExtension}.pdf")
             
-            // 👇 BIND KOTLIN UI UPDATER TO RUST METRICS HERE
             NativeEngine.onProgressUpdate = { msg, prog ->
                 val dynamicProgress = totalProgress + (0.5f / files.size) + (prog * 0.5f / files.size)
                 onUpdate("⚡ Rust Core: $msg", dynamicProgress)
             }
             
             val success = NativeEngine.imagesToPdf(tempDir.absolutePath, pdfFile.absolutePath)
-            
-            if (success) {
-                count++
-            }
+            if (success) count++
         } catch (e: Exception) {
             e.printStackTrace()
         } finally {
