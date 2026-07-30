@@ -21,17 +21,13 @@ Powered by a dual-engine architecture: a low-level **Rust native core** handles 
 
 
 ```
-┌──────────────────────────────────────────┐
-│         Jetpack Compose UI (Kotlin)      │
-└────────────────────┬─────────────────────┘
-│ (JNI Bridge)
-┌────────────────────▼─────────────────────┐
-│       NativeEngine Object / C++ JNI       │
-└────────────────────┬─────────────────────┘
-│ (Low-Level Stream)
-┌────────────────────▼─────────────────────┐
-│        Rust Compiled Core Engine         │
-└──────────────────────────────────────────┘
+Jetpack Compose UI (Kotlin)
+(JNI Bridge)
+         ▼
+NativeEngine Object / C++ JNI
+(Low-Level Stream)
+         ▼
+Rust Compiled Core Engine
 ```
 
 * **Frontend:** Jetpack Compose, Kotlin, Coroutines for asynchronous background threads.
@@ -55,5 +51,15 @@ built entirely on-device via Android Code Studio and Termux.
 
 ---
 
-Note: This README was written by AI.
-The rust core is currently compiled for only arm64 CPUs (sourcecode will be provided soon)
+### Note:
+The app code was written by AI. And may contain bugs.
+For now i have not found any bugs at my end. if you find any plese male a issue on this repo. I will try my best to fix it.
+
+The rust core is currently compiled for only arm64 CPUs.
+my ide dosenot support rust compilation so i had to compile it externally. i will provide the cource code soon.
+
+The apk from release may not install.
+I'm still figuring out how to setup the GitHub action...
+So i will preffer to compile the app directly from the cource code. i will fix it soon.
+
+Contribution are always welcome... 
