@@ -2,8 +2,8 @@ package com.ibanimation.converter
 
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.Color
+import android.graphics.Canvas as AndroidCanvas
+import android.graphics.Color as AndroidColor
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.Build
@@ -14,21 +14,22 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.*
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.Folder
-import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -63,7 +64,63 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
+// Custom Snake / Wavy Progress Bar built natively with Compose Canvas
+@Composable
+fun SnakeWavyProgressBar(
+    progress: Float,
+    modifier: Modifier = Modifier,
+    color: Color = MaterialTheme.colorScheme.primary,
+    trackColor: Color = MaterialTheme.colorScheme.surfaceVariant
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "wave")
+    val phase by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = (2 * Math.PI).toFloat(),
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "phase"
+    )
+
+    Canvas(modifier = modifier.height(16.dp)) {
+        val width = size.width
+        val height = size.height
+        val centerY = height / 2f
+
+        // Track
+        drawLine(
+            color = trackColor,
+            start = Offset(0f, centerY),
+            end = Offset(width, centerY),
+            strokeWidth = 6.dp.toPx(),
+            cap = StrokeCap.Round
+        )
+
+        // Wavy Snake Active Line
+        val progressWidth = width * progress.coerceIn(0.02f, 1f)
+        val path = Path()
+        val amplitude = 3.dp.toPx()
+        val wavelength = 24.dp.toPx()
+
+        var x = 0f
+        path.moveTo(0f, centerY + amplitude * kotlin.math.sin(phase))
+
+        while (x <= progressWidth) {
+            val y = centerY + amplitude * kotlin.math.sin((x / wavelength) * 2 * Math.PI.toFloat() + phase)
+            path.lineTo(x, y)
+            x += 2.dp.toPx()
+        }
+
+        drawPath(
+            path = path,
+            color = color,
+            style = Stroke(width = 6.dp.toPx(), cap = StrokeCap.Round)
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ConverterScreen() {
     val scope = rememberCoroutineScope()
@@ -78,8 +135,8 @@ fun ConverterScreen() {
     // Export Formats & Engine Configuration State
     var selectedFormat by remember { mutableStateOf("JPG") }
     var jpgQuality by remember { mutableFloatStateOf(85f) }
-    
-    // M3 Settings Dropdown State
+
+    // Dropdown Settings State
     var expandedEngineDropdown by remember { mutableStateOf(false) }
     val pdfEngineOptions = listOf("Standard (Fast)", "High Quality (Render 2x)", "Low Quality (Compressed)")
     var selectedPdfEngine by remember { mutableStateOf(pdfEngineOptions[0]) }
@@ -113,18 +170,11 @@ fun ConverterScreen() {
         )
     }
 
-    // Aesthetic Task Finished Dialog
+    // Aesthetic Success Popup
     if (showSuccessDialog) {
         AlertDialog(
             onDismissRequest = { showSuccessDialog = false },
-            icon = {
-                Icon(
-                    imageVector = Icons.Rounded.CheckCircle,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(36.dp)
-                )
-            },
+            icon = { Text("✨", style = MaterialTheme.typography.headlineLarge) },
             title = { Text("Task Finished", style = MaterialTheme.typography.headlineSmall) },
             text = { Text(successMessage, style = MaterialTheme.typography.bodyMedium) },
             confirmButton = {
@@ -224,7 +274,7 @@ fun ConverterScreen() {
                                     progressFraction = progress
                                 }
                             }
-                            
+
                             isProcessing = false
                             progressFraction = 0f
                             verboseLog = ""
@@ -255,12 +305,7 @@ fun ConverterScreen() {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Icon(
-            imageVector = Icons.Rounded.SwapHoriz,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(48.dp)
-        )
+        Text(text = "🔄", style = MaterialTheme.typography.headlineLarge)
         Text(text = "PDF ⇌ CBZ Converter", style = MaterialTheme.typography.headlineLarge)
         Text(text = "Rust backend", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
 
@@ -273,8 +318,8 @@ fun ConverterScreen() {
             label = { Text("Input Folder") },
             modifier = Modifier.fillMaxWidth(),
             trailingIcon = {
-                IconButton(onClick = { activeTarget = "input"; showPicker = true }) {
-                    Icon(Icons.Rounded.Folder, contentDescription = "Select Input Folder")
+                TextButton(onClick = { activeTarget = "input"; showPicker = true }) {
+                    Text("📁")
                 }
             },
             shape = RoundedCornerShape(16.dp)
@@ -289,8 +334,8 @@ fun ConverterScreen() {
             label = { Text("Output Folder") },
             modifier = Modifier.fillMaxWidth(),
             trailingIcon = {
-                IconButton(onClick = { activeTarget = "output"; showPicker = true }) {
-                    Icon(Icons.Rounded.Folder, contentDescription = "Select Output Folder")
+                TextButton(onClick = { activeTarget = "output"; showPicker = true }) {
+                    Text("📁")
                 }
             },
             shape = RoundedCornerShape(16.dp)
@@ -298,15 +343,15 @@ fun ConverterScreen() {
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Dynamic Wavy Expressive Snake Progress Panel
+        // Dynamic Snake Wavy Progress Panel
         AnimatedVisibility(
             visible = isProcessing,
             enter = fadeIn() + expandVertically(),
             exit = fadeOut() + shrinkVertically()
         ) {
             Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-                LinearWavyProgressIndicator(
-                    progress = { animatedProgress },
+                SnakeWavyProgressBar(
+                    progress = animatedProgress,
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(modifier = Modifier.height(8.dp))
@@ -322,32 +367,36 @@ fun ConverterScreen() {
         Card(
             modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
             shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text("CBZ Export Settings", style = MaterialTheme.typography.titleMedium)
-                
+
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // M3 Render Engine Settings Dropdown
-                ExposedDropdownMenuBox(
-                    expanded = expandedEngineDropdown,
-                    onExpandedChange = { expandedEngineDropdown = !expandedEngineDropdown }
-                ) {
+                // Compatible Dropdown Settings Option
+                Box(modifier = Modifier.fillMaxWidth()) {
                     OutlinedTextField(
                         value = selectedPdfEngine,
                         onValueChange = {},
                         readOnly = true,
                         label = { Text("Render Preset") },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedEngineDropdown) },
-                        colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
-                        modifier = Modifier
-                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                            .fillMaxWidth(),
+                        trailingIcon = { Text(if (expandedEngineDropdown) "▲" else "▼") },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = false,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                            disabledBorderColor = MaterialTheme.colorScheme.outline,
+                            disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        ),
                         shape = RoundedCornerShape(12.dp)
                     )
-
-                    ExposedDropdownMenu(
+                    Box(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .clickable { expandedEngineDropdown = true }
+                    )
+                    DropdownMenu(
                         expanded = expandedEngineDropdown,
                         onDismissRequest = { expandedEngineDropdown = false }
                     ) {
@@ -357,8 +406,7 @@ fun ConverterScreen() {
                                 onClick = {
                                     selectedPdfEngine = option
                                     expandedEngineDropdown = false
-                                },
-                                contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
+                                }
                             )
                         }
                     }
@@ -401,7 +449,7 @@ fun ConverterScreen() {
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Conversion Trigger Buttons
+        // Trigger Action Buttons
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -514,10 +562,10 @@ suspend fun processPdfToCbz(
 
                 val page = pdfRenderer.openPage(i)
                 val bitmap = Bitmap.createBitmap(page.width * 2, page.height * 2, Bitmap.Config.ARGB_8888)
-                
-                val canvas = Canvas(bitmap)
-                canvas.drawColor(Color.WHITE)
-                
+
+                val canvas = AndroidCanvas(bitmap)
+                canvas.drawColor(AndroidColor.WHITE)
+
                 page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                 page.close()
 
@@ -562,12 +610,12 @@ suspend fun processCbzToPdf(files: List<File>, outputDir: String, onUpdate: (Str
 
             onUpdate("⚡ Rust Core: Packaging ${cbz.nameWithoutExtension}.pdf...", totalProgress + (0.5f / files.size))
             val pdfFile = File(outDir, "${cbz.nameWithoutExtension}.pdf")
-            
+
             NativeEngine.onProgressUpdate = { msg, prog ->
                 val dynamicProgress = totalProgress + (0.5f / files.size) + (prog * 0.5f / files.size)
                 onUpdate("⚡ Rust Core: $msg", dynamicProgress)
             }
-            
+
             val success = NativeEngine.imagesToPdf(tempDir.absolutePath, pdfFile.absolutePath)
             if (success) count++
         } catch (e: Exception) {
