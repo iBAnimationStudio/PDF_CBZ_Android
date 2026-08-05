@@ -14,6 +14,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "PdfCbzConverter"
+rootProject.name = "ComicShift"
 
 include(":app")
