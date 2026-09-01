@@ -1,0 +1,15 @@
+[package]
+name = "cbz_engine"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+jni = "0.21"
+zip = "0.6"
+walkdir = "2.4"
+printpdf = { version = "0.5.3", features = ["embedded_images"] }
+image = "0.24"
+
